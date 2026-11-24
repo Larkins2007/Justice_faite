@@ -1,0 +1,14 @@
+{
+  "name": "justice-faite-portal",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Justice Faite community portal with owner CMS, member accounts, comments and SQLite backups",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
