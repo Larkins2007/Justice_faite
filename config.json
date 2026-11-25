@@ -1,0 +1,17 @@
+{
+  "site_name": "JUSTICE FAITE",
+  "site_version": "2.0.0",
+  "hero_title": "Justice Faite",
+  "hero_slogan": "Пространство для общения, игр и людей",
+  "hero_description": "Официальный информационный портал сообщества. Здесь собраны правила, активность, игры, экономика бота и всё, что нужно знать участнику.",
+  "hero_badge": "COMMUNITY PORTAL · 16+",
+  "info_channel": "https://t.me/Justice_faite",
+  "join_url": "https://t.me/Justice_faite",
+  "rules_url": "https://telegra.ph/Pravila-Justice-Faite-07-18",
+  "bot_username": "",
+  "bot_start_rest": "rest",
+  "bot_start_tokens": "tokens",
+  "bot_start_anonymous": "anonymous",
+  "footer_year": 2026,
+  "announcement": "Добро пожаловать в Justice Faite Portal 2.0 — полностью обновлённый публичный портал сообщества."
+}

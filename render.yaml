@@ -3,23 +3,11 @@ services:
     name: justice-faite-site
     runtime: node
     region: frankfurt
-    plan: 0.5c-512mb
-    buildCommand: npm install --omit=dev
-    startCommand: npm start
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
     healthCheckPath: /healthz
     autoDeployTrigger: commit
-    disk:
-      name: justice-faite-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
-      - key: NODE_VERSION
-        value: 22.16.0
       - key: NODE_ENV
         value: production
-      - key: DATA_DIR
-        value: /var/data
-      - key: OWNER_SETUP_KEY
-        generateValue: true
-      - key: BOT_SYNC_TOKEN
-        generateValue: true
