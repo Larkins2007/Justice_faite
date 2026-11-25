@@ -68,6 +68,16 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS site_updates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    page_slug TEXT NOT NULL DEFAULT '',
+    published INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_site_updates_published ON site_updates(published, created_at DESC);
   CREATE TABLE IF NOT EXISTS comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     page_slug TEXT NOT NULL,
@@ -418,7 +428,11 @@ function validHttpUrl(s) {
   try { const u = new URL(String(s)); return ['https:','http:'].includes(u.protocol) ? u.toString() : ''; } catch { return ''; }
 }
 function publicPage(row) {
-  return { slug:row.slug,title:row.title,eyebrow:row.eyebrow,description:row.description,source_url:row.source_url,nav_order:row.nav_order };
+  return { slug:row.slug,title:row.title,eyebrow:row.eyebrow,description:row.description,nav_order:row.nav_order };
+}
+function publicUpdate(row) { return {id:row.id,title:row.title,body:row.body,page_slug:row.page_slug,created_at:row.created_at}; }
+function listPublicUpdates(limit=5) {
+  return db.prepare('SELECT id,title,body,page_slug,created_at FROM site_updates WHERE published=1 ORDER BY created_at DESC,id DESC LIMIT ?').all(limit).map(publicUpdate);
 }
 function getPage(slug) { return db.prepare('SELECT * FROM pages WHERE slug=? AND visible=1').get(slug); }
 function getAdminPage(slug) { return db.prepare('SELECT * FROM pages WHERE slug=?').get(slug); }
@@ -486,7 +500,7 @@ async function handleApi(req, res, url) {
   if (p === '/api/public' && method === 'GET') {
     const pages = db.prepare('SELECT * FROM pages WHERE visible=1 ORDER BY nav_order, title').all().map(publicPage);
     const settings = getSettings();
-    return json(res, 200, { pages, settings:{ site_name:settings.site_name, hero_title:settings.hero_title, hero_description:settings.hero_description, hero_badge:settings.hero_badge, member_count:settings.member_count, group_url:settings.group_url, info_url:settings.info_url, rules_url:settings.rules_url, bot_username:settings.bot_username, bot_start_rest:settings.bot_start_rest, bot_start_tokens:settings.bot_start_tokens, bot_start_anonymous:settings.bot_start_anonymous, announcement:settings.announcement, comments_enabled:settings.comments_enabled, registrations_enabled:settings.registrations_enabled, last_bot_sync:settings.last_bot_sync } });
+    return json(res, 200, { pages, updates:listPublicUpdates(5), settings:{ site_name:settings.site_name, hero_title:settings.hero_title, hero_description:settings.hero_description, hero_badge:settings.hero_badge, member_count:settings.member_count, group_url:settings.group_url, info_url:settings.info_url, bot_username:settings.bot_username, bot_start_rest:settings.bot_start_rest, bot_start_tokens:settings.bot_start_tokens, bot_start_anonymous:settings.bot_start_anonymous, announcement:settings.announcement, comments_enabled:settings.comments_enabled, registrations_enabled:settings.registrations_enabled, last_bot_sync:settings.last_bot_sync } });
   }
 
   if (p === '/api/me' && method === 'GET') {
@@ -566,8 +580,9 @@ async function handleApi(req, res, url) {
     const comments = db.prepare(`SELECT c.*,u.username,u.display_name FROM comments c JOIN users u ON u.id=c.user_id ORDER BY CASE c.status WHEN 'pending' THEN 0 ELSE 1 END,c.created_at DESC LIMIT 200`).all();
     const users = db.prepare(`SELECT id,username,display_name,role,status,created_at FROM users ORDER BY created_at DESC LIMIT 300`).all();
     const backups = listBackups();
+    const updates = db.prepare('SELECT id,title,body,page_slug,published,created_at,updated_at FROM site_updates ORDER BY created_at DESC,id DESC LIMIT 100').all();
     const stats = { users:db.prepare('SELECT count(*) n FROM users').get().n, comments:db.prepare('SELECT count(*) n FROM comments').get().n, pending:db.prepare("SELECT count(*) n FROM comments WHERE status='pending'").get().n };
-    return json(res,200,{pages,settings:getSettings(),comments,users,backups,stats});
+    return json(res,200,{pages,settings:getSettings(),comments,users,backups,updates,stats});
   }
   if (p === '/api/admin/pages' && method === 'POST') {
     const session = requireAuth(req,res,true); if (!session) return;
@@ -588,10 +603,22 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const slug = adminPageMatch[1];
     const exists = getAdminPage(slug); if (!exists) return json(res,404,{error:'Страница не найдена.'});
-    db.prepare(`UPDATE pages SET title=?,eyebrow=?,description=?,content=?,source_url=?,visible=?,nav_order=?,updated_at=? WHERE slug=?`)
-      .run(cleanText(body.title,80)||exists.title,cleanText(body.eyebrow,80),cleanText(body.description,300),String(body.content??exists.content),validHttpUrl(body.source_url),body.visible===false?0:1,Number.isFinite(Number(body.nav_order))?Number(body.nav_order):exists.nav_order,nowISO(),slug);
+    const updatedAt = nowISO();
+    db.prepare(`UPDATE pages SET title=?,eyebrow=?,description=?,content=?,source_url='',visible=?,nav_order=?,updated_at=? WHERE slug=?`)
+      .run(cleanText(body.title,80)||exists.title,cleanText(body.eyebrow,80),cleanText(body.description,300),String(body.content??exists.content),body.visible===false?0:1,Number.isFinite(Number(body.nav_order))?Number(body.nav_order):exists.nav_order,updatedAt,slug);
+    let updateId = null;
+    if (body.releaseNote && body.releaseNote.publish === true) {
+      const noteTitle = cleanText(body.releaseNote.title,100);
+      const noteBody = cleanText(body.releaseNote.body,600);
+      if (noteTitle && noteBody) {
+        const result = db.prepare('INSERT INTO site_updates(title,body,page_slug,published,created_at,updated_at) VALUES(?,?,?,1,?,?)')
+          .run(noteTitle,noteBody,slug,updatedAt,updatedAt);
+        updateId = Number(result.lastInsertRowid);
+      }
+    }
     logAudit(session.user.id,'page_update',slug,'Содержимое страницы обновлено');
-    return json(res,200,{ok:true});
+    if (updateId) logAudit(session.user.id,'site_update_publish',String(updateId),'Официальное обновление опубликовано');
+    return json(res,200,{ok:true,updateId});
   }
   if (adminPageMatch && method === 'DELETE') {
     const session = requireAuth(req,res,true); if (!session) return;
@@ -601,14 +628,50 @@ async function handleApi(req, res, url) {
     logAudit(session.user.id,'page_delete',slug,'Страница удалена');
     return json(res,200,{ok:true});
   }
+  if (p === '/api/admin/updates' && method === 'POST') {
+    const session = requireAuth(req,res,true); if (!session) return;
+    const body = await readBody(req);
+    const title = cleanText(body.title,100);
+    const note = cleanText(body.body,600);
+    if (!title || !note) return json(res,400,{error:'Укажи заголовок и описание обновления.'});
+    const published = body.published === true ? 1 : 0;
+    const stamp = nowISO();
+    const result = db.prepare('INSERT INTO site_updates(title,body,page_slug,published,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(title,note,'',published,stamp,stamp);
+    const id = Number(result.lastInsertRowid);
+    logAudit(session.user.id,'site_update_create',String(id),published?'Обновление опубликовано':'Обновление сохранено скрытым');
+    return json(res,201,{ok:true,id});
+  }
+  const updateAdminMatch = p.match(/^\/api\/admin\/updates\/(\d+)$/);
+  if (updateAdminMatch && method === 'PATCH') {
+    const session = requireAuth(req,res,true); if (!session) return;
+    const id = Number(updateAdminMatch[1]);
+    const current = db.prepare('SELECT * FROM site_updates WHERE id=?').get(id);
+    if (!current) return json(res,404,{error:'Обновление не найдено.'});
+    const body = await readBody(req);
+    const title = 'title' in body ? cleanText(body.title,100) : current.title;
+    const note = 'body' in body ? cleanText(body.body,600) : current.body;
+    const published = 'published' in body ? (body.published === true ? 1 : 0) : current.published;
+    if (!title || !note) return json(res,400,{error:'Заголовок и описание не могут быть пустыми.'});
+    db.prepare('UPDATE site_updates SET title=?,body=?,published=?,updated_at=? WHERE id=?').run(title,note,published,nowISO(),id);
+    logAudit(session.user.id,'site_update_update',String(id),published?'Обновление опубликовано':'Обновление скрыто');
+    return json(res,200,{ok:true});
+  }
+  if (updateAdminMatch && method === 'DELETE') {
+    const session = requireAuth(req,res,true); if (!session) return;
+    const id = Number(updateAdminMatch[1]);
+    db.prepare('DELETE FROM site_updates WHERE id=?').run(id);
+    logAudit(session.user.id,'site_update_delete',String(id),'Официальное обновление удалено');
+    return json(res,200,{ok:true});
+  }
+
   if (p === '/api/admin/settings' && method === 'PUT') {
     const session = requireAuth(req,res,true); if (!session) return;
     const body = await readBody(req);
-    const allowed = ['site_name','hero_title','hero_description','hero_badge','member_count','group_url','info_url','rules_url','bot_username','bot_start_rest','bot_start_tokens','bot_start_anonymous','announcement','comments_enabled','registrations_enabled'];
+    const allowed = ['site_name','hero_title','hero_description','hero_badge','member_count','group_url','info_url','bot_username','bot_start_rest','bot_start_tokens','bot_start_anonymous','announcement','comments_enabled','registrations_enabled'];
     const update = {};
     for (const key of allowed) if (key in body) update[key] = String(body[key] ?? '').slice(0, key==='hero_description'||key==='announcement'?500:200);
     if ('member_count' in update && update.member_count && !/^\d{1,7}$/.test(update.member_count)) return json(res,400,{error:'Количество участников должно быть целым числом.'});
-    for (const key of ['group_url','info_url','rules_url']) if (key in update) update[key] = validHttpUrl(update[key]);
+    for (const key of ['group_url','info_url']) if (key in update) update[key] = validHttpUrl(update[key]);
     if ('bot_username' in update) update.bot_username = update.bot_username.replace(/^@/,'').replace(/[^A-Za-z0-9_]/g,'').slice(0,32);
     for (const key of ['bot_start_rest','bot_start_tokens','bot_start_anonymous']) if (key in update) update[key] = update[key].replace(/[^A-Za-z0-9_-]/g,'').slice(0,64);
     for (const key of ['comments_enabled','registrations_enabled']) if (key in update) update[key] = update[key]==='true'?'true':'false';
